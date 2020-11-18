@@ -1,0 +1,186 @@
+/*
+ * Copyright (c) 2020 Xilinx Inc. All rights reserved.
+ *
+ * Author:
+ *       Ben Levinsky <blevinsk@xilinx.com>
+ *
+ * this lop file will hold all the basic information for openamp use cases
+ *
+ * there should be reserved-mem, remoteproc driver code, interrupts,
+ * shared mem resources and specify remote's information
+ *
+ *
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+
+/dts-v1/;
+
+/ {
+	compatible = "system-device-tree-v1,lop";
+        lops {
+	/* common for both linux kernel or rpmsg userspace to rpus  */
+		/* reserved mem node */
+		lop_0_0 {
+			// node add
+			compatible = "system-device-tree-v1,lop,add";
+			node_src = "reserved-memory";
+			node_dest = "/reserved-memory";
+			reserved-memory {
+				#address-cells = <2>;
+				#size-cells = <2>;
+				ranges;
+			};
+		};
+	/* handle linux kernel space to rpus case */
+		/* reserved memory for apu to rpu0 */
+		lop_1_0 {
+			// node add
+			compatible = "system-device-tree-v1,lop,add";
+			node_src = "rpu0vdev0vring0@3ed40000";
+			node_dest = "/reserved-memory/rpu0vdev0vring0@3ed40000";
+			rpu0vdev0vring0: rpu0vdev0vring0@3ed40000 {
+				no-map;
+				reg = <0x0 0x3ed40000 0x0 0x4000>;
+				compatible = "openamp,xlnx,mem-carveout";
+				phandle = <0x455a>;
+			};
+		};
+		lop_1_1 {
+			// node add
+			compatible = "system-device-tree-v1,lop,add";
+			node_src = "rpu0vdev0vring1@3ed44000";
+			node_dest = "/reserved-memory/rpu0vdev0vring1@3ed44000";
+			rpu0vdev0vring1: rpu0vdev0vring1@3ed44000 {
+				no-map;
+				reg = <0x0 0x3ed44000 0x0 0x4000>;
+				compatible = "openamp,xlnx,mem-carveout";
+				phandle = <0x455b>;
+			};
+		};
+		lop_1_2 {
+			// node add
+			compatible = "system-device-tree-v1,lop,add";
+			node_src = "rpu0vdev0buffer@3ed48000";
+			node_dest = "/reserved-memory/rpu0vdev0buffer@3ed48000";
+			rpu0vdev0buffer: rpu0vdev0buffer@3ed48000 {
+				no-map;
+				reg = <0x0 0x3ed48000 0x0 0x100000>;
+				phandle = <0x455c>;
+				compatible = "openamp,xlnx,mem-carveout";
+			};
+		};
+		lop_1_3 {
+			// node add
+			compatible = "system-device-tree-v1,lop,add";
+			node_src = "rpu0elfload@3ed00000";
+			node_dest = "/reserved-memory/rpu0elfload@3ed00000";
+			rpu0elfload_0: rpu0elfload@3ed00000 {
+				no-map;
+				reg = <0x0 0x3ed00000 0x0 0x40000>;
+				compatible = "openamp,xlnx,mem-carveout";
+				phandle = <0x455d>;
+			};
+		};
+		/* reserved memory for apu to rpu1 */
+		/* hold ipi message buffers for cases where remoteproc runs in kernel driver */
+		lop_3_0 {
+			// node add
+			compatible = "system-device-tree-v1,lop,add";
+			node_src = "zynqmp_ipi1";
+			node_dest = "/zynqmp_ipi1";
+			zynqmp_ipi1 {
+				compatible = "xlnx,zynqmp-ipi-mailbox";
+				interrupt-parent = <&gic_a72>;
+				interrupts = <0 33 4>;
+				xlnx,ipi-id = <5>;
+				#address-cells = <1>;
+				#size-cells = <1>;
+				ranges;
+			};
+		};
+		/* linux apu-rpu0 mailbox controller */
+		lop_3_1 {
+			// node add
+			compatible = "system-device-tree-v1,lop,add";
+			node_src = "mailbox@ff990600";
+			node_dest = "/zynqmp_ipi1/mailbox@ff990600";
+			ipi_mailbox_rpu0: mailbox@ff990600 {
+				reg = <0xff3f0ac0 0x20>,
+				      <0xff3f0ae0 0x20>,
+				      <0xff3f0740 0x20>,
+				      <0xff3f0760 0x20>;
+				reg-names = "local_request_region",
+					    "local_response_region",
+					    "remote_request_region",
+					    "remote_response_region";
+				#mbox-cells = <1>;
+				xlnx,ipi-id = <3>;
+				phandle = <0x3ed>;
+			};
+		};
+		/* linux apu-rpu1 mailbox controller */
+		/* linux to rpus remoteproc driver */
+		/* linux remoteproc driver for boths rpus */
+		lop_6_0 {
+			// node add
+			compatible = "system-device-tree-v1,lop,add";
+			node_src = "rpu@ff9a0000";
+			node_dest = "/rpu@ff9a0000";
+			rpu: rpu@ff9a0000 {
+				compatible = "xlnx,zynqmp-r5-remoteproc-1.0";
+				core_conf = "split";
+				#address-cells = <2>;
+				#size-cells = <2>;
+				ranges;
+				reg = <0x0 0xFF9A0000 0x0 0x10000>;
+			};
+		};
+		/* rpu 0 remoteproc */
+		lop_6_1 {
+			// node add
+			compatible = "system-device-tree-v1,lop,add";
+			node_src = "r5_0";
+			node_dest = "/rpu/r5_0";
+			r5_0 {
+				#address-cells = <2>;
+				#size-cells = <2>;
+				ranges;
+				memory-region = <&rproc_0_reserved>, <&rpu0vdev0buffer>, <&rpu0vdev0vring0>, <&rpu0vdev0vring1>;
+				pnode-id = <0x18110005>;
+				mboxes = <&ipi_mailbox_rpu0 0>, <&ipi_mailbox_rpu0 1>;
+				mbox-names = "tx", "rx";
+				tcm_0_a: tcm_0@ffe00000 {
+					reg = <0x0 0xFFE00000 0x0 0x10000>;
+					pnode-id = <0x1831800b>;
+				};
+				tcm_0_b: tcm_0@ffe20000 {
+					reg = <0x0 0xFFE20000 0x0 0x10000>;
+					pnode-id = <0x1831800c>;
+				};
+			};
+		};
+		/* rpu 1 remoteproc */
+		/* rpu0 information */
+		/* rpu1 information */
+		/* output for linux - rpmsg kernel space */
+		lop_10 {
+			// optionally execute a routine in a loaded module. If the routine
+			// isn't found, this is NOT a failure. Since we don't want to tightly
+			// couple these transforms and loaded modules
+			compatible = "system-device-tree-v1,lop,assist-v1";
+			id = "openamp,xlnx-rpu";
+			node = "/rpu@ff9a0000";
+		};
+
+		/* output for rpu0 */
+		/* output for rpu1 */
+
+	/* handle rpmsg userspace to rpus case */
+		/* reserved memory for apu to rpu0 */
+		/* reserved memory for apu to rpu1 */
+		/* linux device tree nodes */
+		/* rpu0 information */
+		/* rpu1 information */
+	};
+};

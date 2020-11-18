@@ -23,29 +23,42 @@
                         compatible = "system-device-tree-v1,lop,modify";
                         modify = "/cpus_r5::";
                 };
+
                 lop_2 {
                         // modify to "nothing", is a remove operation
                         compatible = "system-device-tree-v1,lop,modify";
-                        modify = "/cpus_microblaze::";
+                        modify = "/cpus-cluster@1::";
                 };
                 lop_3 {
                         // modify to "nothing", is a remove operation
                         compatible = "system-device-tree-v1,lop,modify";
-                        modify = "/amba_rpu::";
+                        modify = "/cpus-cluster@2::";
                 };
                 lop_4 {
+                        // modify to "nothing", is a remove operation
+                        compatible = "system-device-tree-v1,lop,modify";
+                        modify = "/amba_rpu::";
+                };
+                lop_5 {
                       compatible = "system-device-tree-v1,lop,select-v1";
                       // clear any old selections
                       select_1;
                       select_2 = "/cpus/.*:compatible:.*arm,cortex-a72.*";
                       select_3 = "/.*:status:.*okay.*";
+                      select_4 = "/.*:device_type:.*memory.*";
                 };
-                lop_5 {
+                lop_6 {
                         // modify to "nothing", is a remove operation
                         compatible = "system-device-tree-v1,lop,modify";
                         modify = "/memory@fffc0000::";
                 };
-                lop_6 {
+		lop_7 {
+                        // modify to "nothing", is a remove operation
+                        compatible = "system-device-tree-v1,lop,modify";
+                        modify = "/tcm_bus::";
+                };
+
+                lop_8 {
                       compatible = "system-device-tree-v1,lop,code-v1";
                       code = "
                           node_list = []
@@ -71,6 +84,8 @@
                                       if not re.search('xlnx,zynqmp-ipi-mailbox', node1['compatible'].value[0]):
                                           match += 1
                               if match == 0:
+                                  invalid_nodes.append(node1)
+                              if re.search('xlnx,axi-bram-ctrl', node1['compatible'].value[0]):
                                   invalid_nodes.append(node1)
                           for node1 in invalid_nodes:
                               tree.delete(node1)

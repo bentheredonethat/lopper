@@ -1,3 +1,7 @@
+import os
+import sys
+sys.path.append(os.path.dirname(__file__))
+
 class SOC_TYPE:
     UNINITIALIZED = -1
     VERSAL = 0
@@ -104,7 +108,6 @@ def generate_openamp_file(carveout_list, options, platform, is_kernel_case, inpu
         range_column = 3
 
     for i in carveout_list:
-
         if "vdev0buffer" in i[0]:
             current_channel_count += 1
             inputs["CHANNEL_0_VDEV0BUFFER_ADDR"] = i[1][addr_column]
@@ -162,18 +165,16 @@ def parse_memory_carevouts(sdt, options, remoteproc_node):
     reserved_mem_node = sdt.tree["/reserved-memory"]
 
     for node in reserved_mem_node.subnodes():
-        if node.props("compatible") != [] and "openamp,xlnx,mem-carveout" in node["compatible"].value:
+        if node.propval("compatible") != [""]:
             phandle_list.append(node.phandle)
-            carveout_list.append( ( (str(node), str(node['reg']).replace("reg = <","").replace(">;","").split(" ")) ))
+            new_val = []
+            for i in node["reg"].value:
+                new_val.append(str(hex(i)))
+            carveout_list.append( (str(node), new_val ) )
 
     # output to DT
-    if remoteproc_node != None:
-        try:
-            remoteproc_node["memory-region"].value = phandle_list
-            remoteproc_node.sync ( sdt.FDT )
-        except:
-            if verbose > 0:
-                print( "[ERROR]: cannot find the target remoteproc node ")
+    remoteproc_node["memory-region"].value = phandle_list
+    remoteproc_node.sync ( sdt.FDT )
 
     return carveout_list
 
