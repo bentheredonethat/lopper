@@ -953,7 +953,7 @@ class LopperSDT:
                                 selected_nodes_possible = tree.__selected__
 
                         if self.verbose > 1:
-                            print( "[DBG++]: selected potential nodes %s" % selected_nodes_possible )
+                            print( "[DBG++]: selected potential nodes %s" % str(selected_nodes_possible) )
                             for n in selected_nodes_possible:
                                 print( "       %s" % n )
 
@@ -991,6 +991,14 @@ class LopperSDT:
                                     if not node_regex:
                                         if sl in selected_nodes:
                                             selected_nodes.remove( sl )
+                                    else: # here add prop
+                                        for selected_node in selected_nodes_possible:
+                                          selected_node + test_prop
+                                          if self.verbose > 1:
+                                            print( "[DBG++]: selected node ",  str(selected_node), " new prop ", str(test_prop) )
+                                        selected_nodes = selected_nodes_possible
+
+
 
                     if self.verbose > 1:
                         print( "[DBG++]: selected nodes %s" % selected_nodes )
