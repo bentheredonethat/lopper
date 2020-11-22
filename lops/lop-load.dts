@@ -14,12 +14,10 @@
         // this means run it first
         priority = <1>;
         lops {
-		/*
                 lop_0 {
                         compatible = "system-device-tree-v1,lop,load";
                         load = "assists/openamp.py";
                 };
-		*/
 		/*
                 lop_1 {
                         compatible = "system-device-tree-v1,lop,load";

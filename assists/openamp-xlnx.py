@@ -58,6 +58,18 @@ versal_ipi_lookup_table = {
 
 zynqmp_ipi_lookup_table = { "0xff310000" : [65, 0x1000000 ] , "0xff340000" : [0 , 0x100 ] }
 
+def trim_ipis(sdt):
+    unneeded_props = ["compatible", "xlnx,ipi-bitmask","interrupts", "xlnx,ipi-id", "xlnx,ipi-target-count", "xlnx,s-axi-highaddr", "xlnx,cpu-name", "xlnx,buffer-base", "xlnx,buffer-index", "xlnx,s-axi-baseaddr", "xlnx,int-id", "xlnx,bit-position"]
+
+    amba_sub_nodes = sdt.tree['/amba'].subnodes()
+    for node in amba_sub_nodes:
+      node_compat = node.propval("compatible")
+      if node_compat != [""]:
+       if 'xlnx,zynqmp-ipi-mailbox' in node_compat:
+         for i in unneeded_props:
+           node[i].value = ""
+         node.sync(sdt.FDT)
+
 def parse_ipis_for_rpu(sdt, options):
     try:
         verbose = options['verbose']
@@ -65,12 +77,16 @@ def parse_ipis_for_rpu(sdt, options):
         verbose = 0
 
     ipi_list = []
+    unneeded_props = ["compatible", "xlnx,ipi-bitmask","interrupts", "xlnx,ipi-id", "xlnx,ipi-target-count", "xlnx,s-axi-highaddr", "xlnx,cpu-name", "xlnx,buffer-base", "xlnx,buffer-index", "xlnx,s-axi-baseaddr", "xlnx,int-id", "xlnx,bit-position"]
     amba_sub_nodes = sdt.tree['/amba'].subnodes()
     for node in amba_sub_nodes:
       node_compat = node.propval("compatible")
       if node_compat != [""]:
        if 'xlnx,zynqmp-ipi-mailbox' in node_compat:
          ipi_list.append(hex(int(node.propval("reg")[1])))
+         for i in unneeded_props:
+           node[i].value = ""
+         node.sync(sdt.FDT)
 
     if verbose:
         print( "[INFO]: Dedicated IPIs for OpenAMP: %s" % ipi_list)
@@ -79,6 +95,7 @@ def parse_ipis_for_rpu(sdt, options):
 
 def is_compat( node, compat_string_to_test ):
     if re.search( "openamp,xlnx-rpu", compat_string_to_test):
+        print("calling xlnx_openamp_rpu")
         return xlnx_openamp_rpu
     return ""
 
@@ -184,13 +201,40 @@ def update_remoteproc_rpus(sdt, memory_node):
 
 def update_mbox_cntr_intr_parent(sdt):
   # find phandle of a72 gic for mailbox controller
-  print("here 2")
   a72_gic_node = sdt.tree["/amba_apu/interrupt-controller@f9000000"]
   # set mailbox controller interrupt-parent to this phandle
   mailbox_cntr_node = sdt.tree["/zynqmp_ipi1"]
   mailbox_cntr_node["interrupt-parent"].value = a72_gic_node.phandle
   sdt.tree.sync()
   sdt.tree.resolve()
+
+def update_pnode_ids_for_tcm(sdt, platform):
+    pnode_id_table = {}
+    tcm_path_prefex = ""
+    if platform == SOC_TYPE.VERSAL:
+        tcm_path_prefex = "/amba/psv_tcm_global@"
+        pnode_id_table = {
+          "ffe00000" : 0x1831800b,
+          "ffe20000" : 0x1831800c,
+          "ffe90000" : 0x1831800d,
+          "ffeb0000" : 0x1831800e,
+          "r5_0"     : 0x18110005,
+          "r5_1"     : 0x18110006,
+        }
+    else:
+        print("presently not populating pnode ids for platforms other than versal")
+        return 1
+
+    # update tcm pnode ids
+    for i in list(pnode_id_table.keys()):
+      if "ffe" in i:
+        current_tcm = sdt.tree[tcm_path_prefex+i]
+        prop = LopperProp("pnode-id")
+        prop.value = pnode_id_table[i]
+        current_tcm + prop
+        current_tcm.sync ( sdt.FDT )
+      
+    # TODO: when only openamp domains are used, add r5 pnodeid info
 
 
 def handle_rpmsg_kernelspace_case(tgt_node, sdt, options, memory_node, rpu_node, platform):
@@ -205,12 +249,360 @@ def handle_rpmsg_kernelspace_case(tgt_node, sdt, options, memory_node, rpu_node,
 
     update_mbox_cntr_intr_parent(sdt)
     update_remoteproc_rpus(sdt, memory_node)
+    update_pnode_ids_for_tcm(sdt, platform)
     return memory_node
 
-# tgt_node: is the openamp domain node number
-# sdt: is the system device tree
-# TODO: this routine needs to be factored and made smaller
+# 1 for master, 0 for slave
+# for each openamp channel, return mapping of role to resource group
+def determine_role(sdt, domain_node):
+  print("in determine_role")
+  include_prop = domain_node["include"]
+  rsc_groups = []
+  current_rsc_group = None
+  if len(list(include_prop.value)) % 2 == 1:
+    print("odd num elem in include list")
+    return -1
+  for index,value in enumerate(include_prop.value):
+    if index % 2 == 0:
+      current_rsc_group = sdt.tree.pnode(value)
+    else:
+      if value == 1: # only for openamp master
+        if current_rsc_group == None:
+          print("invalid phandle to rsc group")
+          return -1
+        rsc_groups.append(current_rsc_group)
+      else:
+        print("only do processing in host openamp channel domain ", value)
+        return -1
+  print(rsc_groups)
+  return rsc_groups
 
+# in this case remote is rpu
+# find node that is other end of openamp channel
+def find_remote_cluster(sdt, domain_node, rsc_group_node):
+  domains = sdt.tree["/domains"]
+  # find other domain including the same resource group
+  remote_domain = None
+  for node in domains.subnodes():
+    if node.propval("include") != [''] and node != domain_node:
+      remote_domain = node
+      break
+  
+  if remote_domain != None:
+    return remote_domain
+  else:
+    return -1
+
+# tests for a bit that is set, going fro 31 -> 0 from MSB to LSB
+def check_bit_set(n, k):
+    if n & (1 << (k)):
+        return True
+
+    return False
+
+# return rpu cluster configuration
+# rpu cpus property fields: Cluster | cpus-mask | execution-mode
+#
+#execution mode ARM-R CPUs:
+#bit 30: lockstep (lockstep enabled == 1)
+#bit 31: secure mode / normal mode (secure mode == 1)
+# e.g. &cpus_r5 0x2 0x80000000>
+# this maps to arg1 as rpu_cluster node
+# arg2: cpus-mask: 0x2 is r5-1, 0x1 is r5-0, 0x3 is both nodes
+#        if 0x3/both nodes and in split then need to openamp channels provided,
+#        otherwise return error
+#        if lockstep valid cpus-mask is 0x3 needed to denote both being used
+#  
+def determine_rpu_config(sdt, domain_node, rpu_cluster):
+  print("in determine_rpu_config")
+  include_prop = rpu_cluster.propval("cpus")
+  if include_prop  != ['']:
+    if len(include_prop) != 3:
+      print("include prop doesnt have correct length of args")
+      return -1
+    print("rpu config: ",  check_bit_set(include_prop[2], 30))
+    return check_bit_set(include_prop[2], 30)
+
+  else:
+    print("no include prop for remote openamp domain")
+    return -1
+
+def determine_core_for_domain(sdt, rpu_cluster):
+  include_prop = rpu_cluster.propval("cpus")
+  return include_prop[1]
+
+def parse_rsc_group_for_mems(sdt, domain_node):
+  print("parse_rsc_group_for_mems")
+
+def construct_carveouts(sdt, rsc_group_node):
+  print("construct_carveouts")
+  # carveouts each have addr,range
+  mem_regions = [[0 for x in range(2)] for y in range(4)] 
+  mem_region_names = {
+    0 : "elfload",
+    1 : "vdev0vring0",
+    2 : "vdev0vring1",
+    3 : "vdev0buffer",
+  }
+  for index,value in enumerate(rsc_group_node["memory"].value):
+    if index % 4 == 1:
+      mem_regions[index//4][0] = value
+    elif index % 4 == 3:
+       mem_regions[index//4][1] = value
+  print("added carveouts from rsc_group_node ",rsc_group_node)
+  carveout_phandle = 0x5ed0
+  carveout_phandle_list = []
+  for i in range(4):
+    name = "rpuX"+ mem_region_names[i]
+    addr = mem_regions[i][0]
+    length = mem_regions[i][1]
+    print(name, addr, length)
+    new_node = LopperNode(-1, "/reserved-memory/"+name)
+    new_node + LopperProp(name="no-map", value=[])
+    new_node + LopperProp(name="reg",value=[0,addr,0,length])
+    new_node + LopperProp(name="phandle",value=carveout_phandle)
+    new_node.phandle = new_node
+
+    sdt.tree.add(new_node)
+
+    carveout_phandle_list.append(carveout_phandle)
+    carveout_phandle += 1
+
+  print("added carveouts to tree")
+  return carveout_phandle_list
+
+def construct_mem_region(sdt, domain_node, rsc_group_node):
+  print("construct_mem_region")
+  # add reserved mem if not present
+  res_mem_node = None
+  carveout_phandle_list = None
+  try:
+    res_mem_node = sdt.tree["/reserved-memory"]
+    # look for carveouts
+    for node in res_mem_node:
+      if "vdev0" in node.abs_path:
+        print("found carveouts")
+        return
+    carveout_phandle_list = construct_carveouts(sdt, rsc_group_node)
+
+
+  except:
+    res_mem_node = LopperNode(-1, "/reserved-memory")
+    res_mem_node + LopperProp(name="#address-cells",value=2)
+    res_mem_node + LopperProp(name="#size-cells",value=2)
+    res_mem_node + LopperProp(name="ranges",value=[])
+
+    sdt.tree.add(res_mem_node)
+    print("added reserved mem node ", res_mem_node)
+    carveout_phandle_list = construct_carveouts(sdt, rsc_group_node)
+  return carveout_phandle_list
+
+
+
+def set_rpu_pnode(sdt, r5_node, rpu_config, cores_to_add, platform):
+  print("set_rpu_pnode", platform, cores_to_add, rpu_config, r5_node)
+  rpu_pnodes = {}
+  if platform == SOC_TYPE.VERSAL:
+    rpu_pnodes = {0 : 0x18110005, 1: 0x18110006}
+  else:
+    print("only versal supported for openamp domains")
+    return -1
+  # rpu config : true is split
+
+  # if lockstep set to r5 0
+  if rpu_config == False:
+       r5_node + LopperProp(name="pnode-id", value = rpu_pnodes[0])
+       r5_node.sync(sdt.FDT)
+
+  # if split and cores to add is length(1) then directly call map
+  # TODO
+  # if split and cores to is length(2)
+  # TODO
+  #    add for each r5 node in list
+
+  return
+ 
+
+
+def setup_mbox_info(sdt, domain_node, r5_node):
+  print("setup_mbox_info")
+  access_prop = domain_node["access"]
+  print(domain_node)
+  for i in access_prop.value:
+    mbox = sdt.tree.pnode(i)
+    if mbox != None and mbox.propval("reg-names") != [''] and mbox.propval("xlnx,ipi-id") != ['']:
+      print(mbox)
+      r5_node + LopperProp(name="mboxes",value=[i,0,i,1])
+      r5_node + LopperProp(name="mbox-names", value = ["tx", "rx"]);
+      sdt.tree.sync()
+      r5_node.sync(sdt.FDT)
+      return
+
+  
+def set_rpu_openamp_channel(sdt, domain_node, remoteproc_node):
+  print("set_rpu_openamp_channel")
+
+# based on rpu_cluster_config + cores determine which tcm nodes to use
+# add tcm nodes to device tree
+def setup_tcm_nodes(sdt, r5_node, platform, rpu_config, rsc_group_node):
+  print("setup_tcm_nodes")
+  tcm_nodes = {}
+  if platform == SOC_TYPE.VERSAL:
+    tcm_pnodes = {
+      "ffe00000" : 0x1831800b,
+      "ffe20000" : 0x1831800c,
+      "ffe90000" : 0x1831800d,
+      "ffeb0000" : 0x1831800e,
+    }
+    tcm_to_hex = {
+      "ffe00000" : 0xffe00000,
+      "ffe20000" : 0xffe20000,
+      "ffe90000" : 0xffe90000,
+      "ffeb0000" : 0xffeb0000,
+    }
+
+  else:
+    print("only versal supported for openamp domains")
+    return -1
+  # determine which tcm nodes to use based on access list in rsc group
+  for phandle_val in rsc_group_node["access"].value:
+    tcm = sdt.tree.pnode(phandle_val)
+    bank = 0
+    if tcm != None:
+      key = tcm.abs_path.split("@")[1]
+      node_name = r5_node.abs_path+"/tcm_remoteproc"+str(bank)+"@"+key
+      tcm_node = LopperNode(-1, node_name)
+      tcm_node + LopperProp(name="pnode-id",value=tcm_pnodes[key])
+      tcm_node + LopperProp(name="reg",value=[0,tcm_to_hex[key],0,0x10000])
+      sdt.tree.add(tcm_node)
+
+def setup_r5_core_node(rpu_config, sdt, domain_node, rsc_group_node, cores_to_add, remoteproc_node, platform):
+
+  print("setup_r5_core_node")
+  carveout_phandle_list = None
+  # add r5 nodes if not present
+  for i in cores_to_add:
+    print("cores_to_add: ",i)
+    try:
+      r5_node = sdt.tree["/rpu@ff9a0000/r5_"+str(i)]
+    except:
+      r5_node = LopperNode(-1, "/rpu@ff9a0000/r5_"+str(i))
+      r5_node + LopperProp(name="#address-cells",value=2)
+      r5_node + LopperProp(name="#size-cells",value=2)
+      r5_node + LopperProp(name="ranges",value=[])
+      sdt.tree.add(r5_node)
+      print("added r5 node ", r5_node)
+      # props
+      set_rpu_pnode(sdt, r5_node, rpu_config, cores_to_add, platform)
+      setup_mbox_info(sdt, domain_node, r5_node)
+      carveout_phandle_list = construct_mem_region(sdt, domain_node, rsc_group_node)
+
+      #tcm nodes
+      for i in r5_node.subnodes():
+        if "tcm" in i.abs_path:
+          "tcm nodes exist"
+          return
+
+      # tcm nodes do not exist. set them up
+      setup_tcm_nodes(sdt, r5_node, platform, rpu_config, rsc_group_node)
+      # add mem regions
+      if carveout_phandle_list != None:
+        r5_node + LopperProp(name="memory-region",value=carveout_phandle_list)
+        
+# add props to remoteproc node
+def set_remoteproc_node(remoteproc_node, sdt, rpu_config):
+  print("populate_remoteproc_node")
+  props = []
+  props.append(LopperProp(name="reg", value =   [0x0, 0xff9a0000, 0x0, 0x10000]))
+  props.append(LopperProp(name="#address-cells",value=2))
+  props.append(LopperProp(name="ranges",value=[]))
+  props.append(LopperProp(name="#size-cells",value=2))
+  props.append(LopperProp(name="core_conf",value="split" if rpu_config == False else "lockstep"))
+  props.append(LopperProp(name="compatible",value="xlnx,zynqmp-r5-remoteproc-1.0"))
+  for i in props:
+    remoteproc_node + i
+  # 
+
+# this should only add nodes  to tree
+def construct_remoteproc_node(rpu_config, rsc_group_node, sdt, domain_node, rpu_cluster, platform):
+  print("construct_remoteproc_node")
+
+  # only add remoteproc node if mbox is present in access list of domain node
+  # check domain's access list for mbox
+  has_corresponding_mbox = False
+  if domain_node.propval("access") != ['']:
+    for i in domain_node.propval("access"):
+      possible_mbox = sdt.tree.pnode(i)
+      if possible_mbox != None:
+        if possible_mbox.propval("reg-names") != ['']:
+          has_corresponding_mbox = True
+  if has_corresponding_mbox == False:
+    print("domain node does not have access list, so do not construct remoteproc node")
+
+  # setup remoteproc node if not already present
+  remoteproc_node = None
+  try:
+    remoteproc_node = sdt.tree["/rpu@ff9a0000"]
+  except:
+    print("remoteproc node not present. now add it to tree")
+    remoteproc_node = LopperNode(-1, "/rpu@ff9a0000")
+    set_remoteproc_node(remoteproc_node, sdt, rpu_config)
+    sdt.tree.add(remoteproc_node, dont_sync = True)
+    remoteproc_node.sync(sdt.FDT)
+    remoteproc_node.resolve_all_refs()
+    sdt.tree.sync()
+
+
+  cores_used = determine_core_for_domain(sdt, rpu_cluster)
+  print("cores_used ", cores_used, " rpu config ", rpu_config)
+  num_cores = 1 if (rpu_config == False or cores_used < 3) else 2
+  cores_to_add = []
+  print("num cores ", num_cores)
+  if num_cores < 2:
+    # figure out which core. 0x2 is rpu1, 0x1 is rpu0
+    cores_to_add.append( 0 if cores_used == 1 else 1)
+  else:
+    cores_to_add.append(0)
+    cores_to_add.append(1)
+    print("TODO: add support for multiple channels")
+  # lockstep is false, split is true
+  # if lockstep from rpu config , only generate 1 r5 core node in remoteproc
+  # if split, and 0x1 or 0x2, then generate 1 node
+  # if r5 nodes not present
+  setup_r5_core_node(rpu_config, sdt, domain_node, rsc_group_node, cores_to_add, remoteproc_node, platform)
+
+
+def parse_openamp_domain(sdt, options, tgt_node):
+  print("here to parse openamp domain")
+  domain_node = sdt.tree[tgt_node]
+  root_node = sdt.tree["/"]
+  platform = SOC_TYPE.UNINITIALIZED
+  if 'versal' in str(root_node['compatible']):
+      platform = SOC_TYPE.VERSAL
+  elif 'zynqmp' in str(root_node['compatible']):
+      platform = SOC_TYPE.ZYNQMP
+  else:
+      print("invalid input system DT")
+      return False
+
+  rsc_groups = determine_role(sdt, domain_node)
+  if rsc_groups == -1:
+    return rsc_groups
+  # if master, find corresponding  slave
+  # if none report error
+  for current_rsc_group in rsc_groups:
+    rpu_cluster = find_remote_cluster(sdt, domain_node, current_rsc_group)
+    if rpu_cluster == -1:
+      print("failed to find_remote_cluster")
+      return -1
+    rpu_config = determine_rpu_config(sdt, domain_node, rpu_cluster)
+
+    # should only add nodes to tree
+    construct_remoteproc_node(rpu_config, current_rsc_group, sdt, domain_node, rpu_cluster, platform)
+  # ensure interrupt parent for openamp-related ipi message buffers is set
+  update_mbox_cntr_intr_parent(sdt)
+  # ensure that extra ipi mboxes do not have props that interfere with linux boot
+  trim_ipis(sdt) 
 
 # as of nov 17 2020:
 # this is what it needs to account for:
@@ -232,6 +624,7 @@ def handle_rpmsg_kernelspace_case(tgt_node, sdt, options, memory_node, rpu_node,
 #   rpu
 #   - header
 def xlnx_openamp_rpu( tgt_node, sdt, options ):
+    print("here xlnx_openamp_rpu")
     try:
         verbose = options['verbose']
     except:
@@ -249,6 +642,13 @@ def xlnx_openamp_rpu( tgt_node, sdt, options ):
     else:
         print("invalid input system DT")
         return False
+
+    # here parse openamp domain if applicable
+    ret = parse_openamp_domain(sdt, options, tgt_node)
+    if ret == -2:
+      return True
+    # the below is being depcrecated
+    return True
 
     # find the added rpu node
     try:
