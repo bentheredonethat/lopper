@@ -99,7 +99,8 @@
 		        0xffe90000 : 0x3fd42,
 		        0xffeb0000 : 0x3fd43,
 		      }
-                      for node1 in node.subnodes():
+                      root_node = node.tree['/']
+                      for node1 in root_node.subnodes():
                         prop_val = node1.propval('compatible')
                         if prop_val != ['']:
                           for compat_str in prop_val:
@@ -197,5 +198,160 @@
 			id = "openamp,xlnx-rpu";
 
 		};
+		lop_5_2 {
+			compatible = "system-device-tree-v1,lop,output";
+                         outfile = "linux-rpmsg-kernelspace.dts"; 
+			 nodes = "*";
+		};
+		// remove remoteproc driver nodes
+                lop_5_3 {
+                      compatible = "system-device-tree-v1,lop,code-v1";
+                      code = "
+                      root_node = node.tree['/']
+                      for node1 in root_node.subnodes():
+                        prop_val = node1.propval('compatible')
+                        if prop_val != ['']:
+                          if 'xlnx,zynqmp-r5-remoteproc-1.0' in prop_val:
+                            print(node1,  ' to be removed')
+                            root_node.tree - node1
+                      res_mem_node = node.tree['/reserved-memory']
+                      for node1 in res_mem_node.subnodes():
+                        if 'rpu' in node1.abs_path:
+                          print(node1,  ' to be removed')
+                          root_node.tree - node1
+                      mbox_ctr = node.tree['/zynqmp_ipi1']
+                      for node1 in mbox_ctr.subnodes():
+                        print(node1,  ' to be removed')
+                        root_node.tree - node1
+                        ";
+                };
+
+		// remove mbox cntr from a72 domain access
+		lop_5_4 {
+			compatible = "system-device-tree-v1,lop,code-v1";
+			code = "
+			domain_node = node.tree['/domains/openamp_a72_0']
+			access_prop = domain_node['access']
+			domain_node - access_prop
+			 ";
+		};
+                lop_5_4_3 {
+                      compatible = "system-device-tree-v1,lop,code-v1";
+                      code = "
+                      ipi_phandle = 0x3beef0
+                      root_node = node.tree['/']
+                      for node1 in root_node.subnodes():
+                        prop_val = node1.propval('xlnx,ipi')
+                        if prop_val != ['']:
+                          newprop = LopperProp(name='phandle',value=ipi_phandle)
+                          node1.phandle = ipi_phandle
+                          ipi_phandle += 1
+                          node1 + newprop
+                        ";
+                };
+
+
+		// then add default ipis for a72
+		lop_5_5 {
+                  compatible = "system-device-tree-v1,lop,code-v1";
+                  code = "
+                  a72_domain_node = node.tree['/domains/openamp_a72_0']
+                  channel0_ipi = None
+                  channel1_ipi = None
+                  for node1 in node.tree['/'].subnodes():
+                    node_compat = node1.propval('xlnx,ipi')
+                    if node_compat != ['']:
+                      if 'ff360000' in node1.abs_path:
+                        print(node1)
+                        channel0_ipi = node1.phandle
+                      if 'ff370000' in node1.abs_path:
+                        print(node1)
+                        channel1_ipi = node1.phandle
+                  if channel0_ipi != None and channel1_ipi != None:
+                    access_prop = LopperProp(name='access',value=[channel0_ipi, channel1_ipi])
+                    a72_domain_node + access_prop
+                  else:
+                    print('error: could not find a72 domain openamp channel ipis')
+                    return -1
+                  ";
+		};
+		// then add default ipis for r5-0/r5-lockstep and r5-1
+		lop_5_6 {
+                  compatible = "system-device-tree-v1,lop,code-v1";
+                  code = "
+                  r5_0_domain_node = node.tree['/domains/openamp_r5_cluster/openamp_r5_0']
+                  r5_1_domain_node = node.tree['/domains/openamp_r5_cluster/openamp_r5_1']
+
+                  channel0_ipi = None
+                  channel1_ipi = None
+                  for node1 in node.tree['/'].subnodes():
+                    node_compat = node1.propval('xlnx,ipi')
+                    if node_compat != ['']:
+                      if 'ff340000' in node1.abs_path:
+                        print('node :',node1, 'phandle ', node1.phandle)
+                        channel0_ipi = node1.phandle
+                      if 'ff350000' in node1.abs_path:
+                        print('node :',node1, 'phandle ', node1.phandle)
+                        channel1_ipi = node1.phandle
+
+                  if channel0_ipi != None:
+                    access_prop = LopperProp(name='access',value=[channel0_ipi])
+                    r5_0_domain_node + access_prop
+                  if channel1_ipi != None:
+                    access_prop = LopperProp(name='access',value=[channel1_ipi])
+                    r5_1_domain_node + access_prop
+                  else:
+                    print('error: could not find 1 of the remote domain openamp channel ipis: channel0_ipi ',channel0_ipi,' channel1_ipi ', channel1_ipi)
+                    return -1
+                  ";
+		};
+
+		// call openamp,xlnx-rpu
+		lop_7_1 {
+			compatible = "system-device-tree-v1,lop,assist-v1";
+			node = "/domains/openamp_a72_0";
+			id = "openamp,xlnx-rpu";
+
+		};
+		// remove remote ipi nodes from linux device tree
+                lop_7_1_2 {
+                      compatible = "system-device-tree-v1,lop,code-v1";
+                      code = "
+                      root_node = node.tree['/']
+                      for node1 in root_node.subnodes():
+                        node_compat = node1.propval('xlnx,ipi')
+                        if node_compat != ['']:
+                          if 'ff340000' in node1.abs_path or 'ff350000' in node1.abs_path:
+                            print(node1,  ' to be removed')
+                            root_node.tree - node1
+                        ";
+                };
+
+		// remove unneeded child nodes from  host ipi nodes from linux device tree
+                lop_7_1_3 {
+                      compatible = "system-device-tree-v1,lop,code-v1";
+                      code = "
+                      host_ipis = {'ff370000':34, 'ff360000':33}
+                      root_node = node.tree['/']
+                      for node1 in root_node.subnodes():
+                        propstr = node1.propval('xlnx,ipi-bitmask')
+                        if propstr != ['']:
+                          for current in list(host_ipis.keys()):
+                            if current in node1.abs_path and node1.abs_path != '/amba/mailbox@'+current:
+                              print(node1,  ' to be removed')
+                              root_node.tree - node1
+                            elif node1.abs_path ==  '/amba/mailbox@'+current:
+                              p = node1['status']
+                              print('remove ',str(p),' from ',str(node1))
+                              node1.delete(p)
+                        ";
+                };
+
+		lop_7_2 {
+			compatible = "system-device-tree-v1,lop,output";
+                         outfile = "linux-rpmsg-userspace.dts"; 
+			 nodes = "*";
+		};
+
 	};
 };
