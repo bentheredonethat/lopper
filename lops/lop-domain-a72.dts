@@ -60,7 +60,7 @@
                       compatible = "system-device-tree-v1,lop,code-v1";
                       code = "
                         # delete bram
-                          for node1 in node.subnodes():
+                          for node1 in node.tree['/'].subnodes():
                               prop_val = node1.propval('compatible')
                               if prop_val != ['']:
                                   for compat_str in prop_val:
