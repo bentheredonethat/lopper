@@ -1543,6 +1543,9 @@ def xlnx_remoteproc_v2_add_core(tree, openamp_channel_info, channel_id, power_do
     for key in core_node_props.keys():
         core_node + LopperProp(name=key, value = core_node_props[key])
 
+    if openamp_channel_info["xlnx,ddr-boot" + channel_id]:
+        core_node + LopperProp(name="xlnx,ddr-boot")
+
     tree.add(core_node)
 
     return core_node
@@ -1661,6 +1664,23 @@ def xlnx_remoteproc_v2_interim(tree, channel_id, cpu_config, openamp_channel_inf
 
     return True
 
+def xlnx_remoteproc_v2_ddr_boot_setup(tree, channel_id, openamp_channel_info, rpu_core, verbose = 0):
+    tree.resolve()
+    elf_load_node = tree.pnode(openamp_channel_info["new_ddr_nodes"+channel_id][0])
+    core_mem_reg_ddr_vals = elf_load_node['reg'].value
+    cluster_ranges_val = [ rpu_core.value, hex(core_mem_reg_ddr_vals[1]), 0, hex(core_mem_reg_ddr_vals[1]), 0, hex(core_mem_reg_ddr_vals[3]) ]
+    core_reg_names = [ elf_load_node.name ]
+    core_reg_val = [ rpu_core.value,  hex(core_mem_reg_ddr_vals[1]), 0, hex(core_mem_reg_ddr_vals[3]) ]
+
+    placeholder_base = core_mem_reg_ddr_vals[1] - 0x100
+    placeholder_node = LopperNode(-1, elf_load_node.parent.abs_path + '/placeholder_for_zephyr_ddr_boot_case@' + hex(placeholder_base)[2:])
+    placeholder_node + LopperProp(name="no-map")
+    placeholder_node + LopperProp(name="reg", value=[0, hex(placeholder_base), 0, 0x100])
+    tree + placeholder_node
+    placeholder_node.phandle_or_create()
+    openamp_channel_info["new_ddr_nodes"+channel_id][0] = placeholder_node.phandle
+
+    return [core_mem_reg_ddr_vals, core_reg_names, core_reg_names, core_reg_val]
 
 def xlnx_remoteproc_v2_construct_cluster(tree, channel_id, openamp_channel_info, verbose = 0):
     cpu_config = openamp_channel_info["cpu_config"+channel_id]
@@ -1684,8 +1704,12 @@ def xlnx_remoteproc_v2_construct_cluster(tree, channel_id, openamp_channel_info,
     tcm_nodes = xlnx_remoteproc_v2_get_tcm_nodes(openamp_channel_info["elfload"+channel_id])
 
     # validate and use TCM nodes - this will be used for cluster ranges property too.
-    for tcm_bank in tcm_nodes:
-        xlnx_remoteproc_v2_parse_tcm_node(tcm_bank, core_reg_names, cluster_ranges_val, core_reg_val, power_domains, cpu_config, platform, rpu_core)
+    # only parse TCMs if not DDR boot
+    if openamp_channel_info["xlnx,ddr-boot" + channel_id]:
+        [core_mem_reg_ddr_vals, core_reg_names, core_reg_names, core_reg_val] = xlnx_remoteproc_v2_ddr_boot_setup(tree, channel_id, openamp_channel_info, rpu_core, verbose = 0)
+    else:
+        for tcm_bank in tcm_nodes:
+            xlnx_remoteproc_v2_parse_tcm_node(tcm_bank, core_reg_names, cluster_ranges_val, core_reg_val, power_domains, cpu_config, platform, rpu_core)
 
     # construct remoteproc cluster node
     cluster_node_path = "/remoteproc@" + xlnx_remoteproc_v2_cluster_base_str(platform, rpu_core)
@@ -1962,6 +1986,7 @@ def xlnx_remoteproc_parse(tree, node, openamp_channel_info, verbose = 0 ):
         openamp_channel_info["elfload"+channel_id] = channel_elfload_nodes
         openamp_channel_info["remote_node"+channel_id] = remote_node
         openamp_channel_info["node"+channel_id] = node
+        openamp_channel_info["xlnx,ddr-boot" + channel_id] = SOC_TYPE.VERSAL2 == platform and remote_node.propval('xlnx,ddr-boot') != ['']
 
         ret = xlnx_remoteproc_update_tree(tree, channel_id, openamp_channel_info, verbose = 0 )
         if not ret:
