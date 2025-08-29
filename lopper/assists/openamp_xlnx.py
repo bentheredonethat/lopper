@@ -482,165 +482,44 @@ def xlnx_openamp_zephyr_update_tree(machine, sdt, options):
 
     return True
 
-def xlnx_openamp_gen_outputs_only(sdt, machine, output_file, verbose = 0 ):
-    global machine_to_dt_mappings_v2
-    tree = sdt.tree
-    platform = get_platform(tree, verbose)
 
-    if machine not in machine_to_dt_mappings_v2.keys():
-        print("OPENAMP: XLNX: ERROR: unsupported machine to remoteproc node mapping: ", machine)
-        return False
+def xlnx_openamp_gen_outputs_after_translation_only(sdt, machine, output_file, verbose = 0 ):
+    # map machine to target domain node
+    print(" -> xlnx_openamp_gen_outputs_after_translation_only")
+    tgt_d_to_d_node = [ n for n in sdt.tree["/"].subnodes(name=".*domain-to-domain$") if n.propval("cluster_cpu") == [ machine ] ]
+    tgt_rpmsg_relation_node = [ n for n in tgt_d_to_d_node[0].children() if "rpmsg-relation" in n.name ]
+    remote_mbox_node = [ sdt.tree.pnode( tgt_rpmsg_relation_node[0].propval("mbox")[0] ) ]
 
-    try:
-        target_node = tree[machine_to_dt_mappings_v2[machine]]
-    except KeyError:
-        print("OPENAMP: XLNX: ERROR: xlnx_openamp_gen_outputs_only: could not find mapping:", machine, machine_to_dt_mappings_v2[machine])
-        return False
+    host_domain_node = [sdt.tree.pnode(tgt_rpmsg_relation_node[0].propval("host")[0])]
+    host_rpmsg_relation_node = [ n for n in host_domain_node[0].subnodes(name=".*rpmsg-relation$") ]
+    host_mbox_node = [ sdt.tree.pnode( host_rpmsg_relation_node[0].propval("mbox")[0] ) ]
 
-    mem_reg_val = target_node.propval("memory-region")
-    if len(mem_reg_val) != 4:
-        print("OPENAMP: XLNX: ERROR: malformed memory region property for node: ", target_node)
-        return False
+    # get rpmsg relation carveouts
+    vdev0buf_node = [ sdt.tree.pnode(n) for n in tgt_rpmsg_relation_node[0].propval("carveouts") if "vdev0buffer" in sdt.tree.pnode(n).name ]
+    vrings = [ sdt.tree.pnode(n) for n in tgt_rpmsg_relation_node[0].propval("carveouts") if "vring" in sdt.tree.pnode(n).name ]
 
-    try:
-        elfload_base = tree.pnode(mem_reg_val[0]).propval("reg")[1]
-
-        mbox_node_pval = target_node.propval('mboxes')
-        if mbox_node_pval == []:
-            print("OPENAMP: XLNX: ERROR: xlnx_openamp_gen_outputs_only: mbox_node == []")
-            return False
-
-        mbox_node = tree.pnode(mbox_node_pval[0])
-        remote_vect_id = mbox_node.parent.propval('xlnx,int-id')[0]
-        ipi_irq_vect_id = hex(remote_vect_id)
-        ipi_irq_vect_id_rtos = hex(remote_vect_id-32)
-        remote_ipi_str = hex(mbox_node.parent.propval('reg')[1])
-        host_bitmask = hex(mbox_node.propval('xlnx,ipi-bitmask')[0])
-
-        inputs = {
-        "POLL_BASE_ADDR": remote_ipi_str,
-        "SHM_DEV_NAME": "\"" + hex(elfload_base)[2:] + '.shm\"',
-        "DEV_BUS_NAME": "\"generic\"",
-        "IPI_DEV_NAME":  "\"" + remote_ipi_str[2:] + '.ipi\"',
-        "IPI_IRQ_VECT_ID": ipi_irq_vect_id,
-        "IPI_IRQ_VECT_ID_FREERTOS": ipi_irq_vect_id_rtos,
-        "IPI_CHN_BITMASK": host_bitmask,
-        "RING_TX": "FW_RSC_U32_ADDR_ANY",
-        "RING_RX": "FW_RSC_U32_ADDR_ANY",
-        "SHARED_MEM_PA": hex(tree.pnode(mem_reg_val[2]).propval("reg")[1]),
-        "SHARED_MEM_SIZE":"0x100000UL",
-        "SHARED_BUF_OFFSET": hex(tree.pnode(mem_reg_val[2]).propval("reg")[3] + tree.pnode(mem_reg_val[3]).propval("reg")[3]),
-        "SHARED_BUF_PA": hex(tree.pnode(mem_reg_val[1]).propval("reg")[1]),
-        "SHARED_BUF_SIZE": hex(tree.pnode(mem_reg_val[1]).propval("reg")[3]),
-        "EXTRAS":"",
-        }
-    except:
-        print("OPENAMP: XLNX: ERROR: xlnx_openamp_gen_outputs_only: Error in generating template for RPU header.")
-        return False
-
+    inputs = {}
+    inputs["POLL_BASE_ADDR"] = hex(remote_mbox_node[0].propval("reg")[1])
+    inputs["IPI_IRQ_VECT_ID"] = host_mbox_node[0].propval("xlnx,int-id")[0]
+    inputs["IPI_IRQ_VECT_ID_FREERTOS"] = host_mbox_node[0].propval("xlnx,int-id")[0] - 32
+    inputs["SHM_DEV_NAME"] = "\"my.shm\""
+    inputs["IPI_DEV_NAME"] = "\"my.ipi\""
+    inputs["DEV_BUS_NAME"] = "\"generic\""
+    inputs["IPI_CHN_BITMASK"] = hex(host_mbox_node[0].propval("xlnx,ipi-bitmask")[0])
+    inputs["RING_TX"] = "FW_RSC_U32_ADDR_ANY"
+    inputs["RING_RX"] = "FW_RSC_U32_ADDR_ANY"
+    inputs["SHARED_MEM_PA"] = hex(min( [ int(vring.propval("start")[0]) for vring in vrings]))
+    inputs["SHARED_MEM_SIZE"] = "0x100000UL"
+    inputs["SHARED_BUF_OFFSET"] = hex(sum( [ int(vring.propval("size")[0]) for vring in vrings]))
+    inputs["SHARED_BUF_PA"] = hex(vdev0buf_node[0].propval("start")[0])
+    inputs["SHARED_BUF_SIZE"] = hex(vdev0buf_node[0].propval("size")[0])
+    inputs["EXTRAS"] = ""
     f = open(output_file, "w")
     output = Template(platform_info_header_r5_template)
     f.write(output.substitute(inputs))
     f.close()
 
     return True
-
-def xlnx_openamp_gen_outputs(openamp_channel_info, channel_id, role, verbose = 0 ):
-    text_file_contents = ""
-    rpmsg_native = openamp_channel_info["rpmsg_native_"+channel_id]
-    carveouts = openamp_channel_info["carveouts_"+channel_id]
-    elfload = openamp_channel_info["elfload"+channel_id]
-    platform = openamp_channel_info["platform"]
-    tx = None
-    rx = None
-    SHARED_BUF_PA = 0
-    SHARED_BUF_SIZE = 0
-    inputs = None
-    global output_file
-
-    for c in carveouts:
-        if "tcm" in c.name:
-            continue
-        base = hex(c.props("start")[0].value)
-        size = hex(c.props("size")[0].value)
-        name = ""
-        if "vring0" in c.name:
-            name = "VRING0"
-            tx = base
-        elif "vring1" in c.name:
-            name = "VRING1"
-            rx = base
-        else:
-            name = "VDEV0BUFFER"
-            SHARED_BUF_PA = base
-            SHARED_BUF_SIZE = size
-
-    if not rpmsg_native:
-        tx = "FW_RSC_U32_ADDR_ANY"
-        rx = "FW_RSC_U32_ADDR_ANY"
-
-    SHARED_MEM_PA = 0
-    RSC_MEM_PA = 0
-    for e in elfload:
-        if e.props("start") != []: # filter to only parse ELF LOAD node
-            RSC_MEM_PA = hex(e.props("start")[0].value)
-            SHARED_MEM_PA = hex(e.props("start")[0].value + e.props("size")[0].value)
-            break
-
-    shm_dev_name = "\"" + RSC_MEM_PA[2:] + '.shm\"'
-
-    template = None
-
-    host_ipi = openamp_channel_info["host_ipi_" + channel_id]
-    remote_ipi = openamp_channel_info["remote_ipi_" + channel_id]
-
-    IPI_CHN_BITMASK = hex(host_ipi.propval("xlnx,ipi-bitmask")[0])
-    POLL_BASE_ADDR = hex(remote_ipi.propval("reg")[1])
-    IPI_IRQ_VECT_ID = hex(remote_ipi.propval("xlnx,int-id")[0])
-    IPI_IRQ_VECT_ID_FREERTOS = hex(remote_ipi.propval("xlnx,int-id")[0]-32)
-
-    template = platform_info_header_r5_template
-    bus_name = "\"generic\"" if role == 'remote' else "\"platform\""
-    ipi_dev_name = "\"ipi\""
-
-    inputs = {
-        "POLL_BASE_ADDR":POLL_BASE_ADDR,
-        "SHM_DEV_NAME":shm_dev_name,
-        "DEV_BUS_NAME":bus_name,
-        "IPI_DEV_NAME":ipi_dev_name,
-        "IPI_IRQ_VECT_ID":IPI_IRQ_VECT_ID,
-        "IPI_IRQ_VECT_ID_FREERTOS":IPI_IRQ_VECT_ID_FREERTOS,
-        "IPI_CHN_BITMASK":IPI_CHN_BITMASK,
-        "RING_TX":tx,
-        "RING_RX":rx,
-        "SHARED_MEM_PA": SHARED_MEM_PA,
-        "SHARED_MEM_SIZE":"0x100000UL",
-        "SHARED_BUF_OFFSET":hex(openamp_channel_info["shared_buf_offset_"+channel_id]),
-        "SHARED_BUF_PA":SHARED_BUF_PA,
-        "SHARED_BUF_SIZE":SHARED_BUF_SIZE,
-        "EXTRAS":"",
-    }
-
-    f = open(output_file, "w")
-    output = Template(template)
-    f.write(output.substitute(inputs))
-    f.close()
-
-    return True
-
-def xlnx_rpmsg_parse_generate_native_amba_node(tree):
-    try:
-        amba_node = tree["/axi"]
-    except:
-        amba_node = LopperNode(-1, "/axi")
-        amba_node + LopperProp(name="u-boot,dm-pre-reloc")
-        amba_node + LopperProp(name="ranges")
-        amba_node + LopperProp(name="#address-cells", value = 2)
-        amba_node + LopperProp(name="#size-cells", value = 2)
-        tree.add(amba_node)
-        tree.resolve()
-
-    return amba_node
 
 def xlnx_rpmsg_parse(tree, node, openamp_channel_info, options, xlnx_options = None, verbose = 0 ):
     print(" -> xlnx_rpmsg_parse", node)
@@ -773,14 +652,6 @@ def xlnx_rpmsg_parse(tree, node, openamp_channel_info, options, xlnx_options = N
     if chan_id == None and role == 'remote' and no_header == False:
         print("Unable to find channel with pair", arg_host, arg_remote)
         return False
-
-    # Generate Text file to configure OpenAMP Application
-    # Only do this for remote firmware configuration
-
-    if role == 'remote' and no_header == False:
-        ret = xlnx_openamp_gen_outputs(openamp_channel_info, chan_id, role, verbose)
-        if not ret:
-            return ret
 
     # remove definitions
     try:
@@ -1550,7 +1421,7 @@ def xlnx_openamp_parse(sdt, options, xlnx_options = None, verbose = 0 ):
             arg_remote = xlnx_options["openamp_remote"]
 
         if gen_outputs_only and output_file != None and arg_remote != None:
-            return xlnx_openamp_gen_outputs_only(sdt, arg_remote, output_file, verbose)
+            return xlnx_openamp_gen_outputs_after_translation_only(sdt, arg_remote, output_file, verbose)
     except getopt.GetoptError as err:
        print('ERROR: Failed to parse arguments in openamp module.', err)
        return False
@@ -1573,7 +1444,6 @@ def xlnx_openamp_parse(sdt, options, xlnx_options = None, verbose = 0 ):
         xlnx_openamp_zephyr_update_tree(machine, sdt, options)
         xlnx_openamp_remove_channels(tree)
         return True
-
 
     opts,args2 = getopt.getopt( args, "l:m:n:pv", [ "verbose", "permissive", "openamp_no_header", "openamp_role=", "openamp_host=", "openamp_remote=", "openamp_output_filename=", "zephyr_dt" ] )
 
