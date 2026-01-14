@@ -1499,6 +1499,32 @@ def resolve_host_remote( tree, subnode, verbose = 0 ):
     return True
 
 
+def xlnx_libmetal_expand(tree, subnode, verbose = 0 ):
+    """Expand Libmetal YAML specialization into full device tree references.
+
+    Args:
+        tree (LopperTree): Device tree to update.
+        subnode (LopperNode): YAML subnode being expanded.
+        verbose (int): Verbosity flag for diagnostics.
+
+    Returns:
+        bool: True when all references are resolved successfully.
+
+    Algorithm:
+        Resolves host/remote phandles, hydrates carveout references, and assigns
+        mailbox definitions using shared helper functions.
+    """
+    if not resolve_host_remote( tree, subnode, verbose):
+        return False
+    if not resolve_carveouts(tree, subnode, "carveouts", verbose):
+        return False
+
+    # this is optional
+    resolve_carveouts(tree, subnode, "elfload", verbose)
+
+    return resolve_rpmsg_mbox( tree, subnode, verbose)
+
+
 def xlnx_openamp_rpmsg_expand(tree, subnode, verbose = 0 ):
     """Expand RPMsg YAML specialization into full device tree references.
 
@@ -1585,7 +1611,7 @@ def openamp_rpmsg_expand(tree, subnode, verbose = 0 ):
 
 openamp_d_to_d_compat_strings = {
     "openamp,rpmsg-v1" : openamp_rpmsg_expand,
-    "libmetal,ipc-v1" : openamp_rpmsg_expand,
+    "libmetal,ipc-v1" : xlnx_libmetal_expand,
     "openamp,remoteproc-v2" : openamp_remoteproc_expand,
 }
 
