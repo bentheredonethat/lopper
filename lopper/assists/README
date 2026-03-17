@@ -110,3 +110,129 @@ This is especially useful when:
 -->You want to embed a custom bitstream name in the overlay.
 Usage Example:
 lopper -O <output_dir>/ -f --enhanced <path_to_system_top>/system-top.dts -- xlnx_overlay_pl_dt <machine> <config> <path_to_pl_dtsi>/pl.dtsi --firmware-name=<my_custom.bit>
+
+################################################################################################
+
+# extract-xen.py - Xen Assist
+
+`extract-xen.py` supports two related Xen workflows:
+
+- passthrough extraction from an already extracted subtree
+- ImageBuilder config generation from an already-expanded Xen domain tree
+
+## ImageBuilder Usage
+
+```
+lopper <system device tree> <output dts> -- extract-xen imagebuilder -t <xen-domain> [options]
+```
+
+This mode expects the input system device tree to already contain an
+expanded `/domains` subtree from a previous YAML translation or assist
+run.
+
+## ImageBuilder Options
+
+|-----------------------------------------------------------------------------------|
+| Option                 | Description                                              |
+|-----------------------------------------------------------------------------------|
+| `-t <xen-domain>`      | Required Xen domain node name under `/domains`           |
+|-----------------------------------------------------------------------------------|
+| `--output <file>`      | Output ImageBuilder config filename. Default: `config`   |
+|-----------------------------------------------------------------------------------|
+| `--output-dir <dir>`   | Output directory for generated config                    |
+|-----------------------------------------------------------------------------------|
+| `--dom0 <name>`        | Explicit Dom0 domain name                                |
+|-----------------------------------------------------------------------------------|
+| `--memory-start <val>` | Override `MEMORY_START`                                  |
+|-----------------------------------------------------------------------------------|
+| `--memory-end <val>`   | Override `MEMORY_END`                                    |
+|-----------------------------------------------------------------------------------|
+| `--device-tree <val>`  | Override `DEVICE_TREE`                                   |
+|-----------------------------------------------------------------------------------|
+| `--xen <val>`          | Override `XEN`                                           |
+|-----------------------------------------------------------------------------------|
+| `--xen-cmd <val>`      | Override `XEN_CMD`                                       |
+|-----------------------------------------------------------------------------------|
+| `--dom0-kernel <val>`  | Override `DOM0_KERNEL`                                   |
+|-----------------------------------------------------------------------------------|
+| `--dom0-cmd <val>`     | Override `DOM0_CMD`                                      |
+|-----------------------------------------------------------------------------------|
+| `--dom0-ramdisk <val>` | Override `DOM0_RAMDISK`                                  |
+|-----------------------------------------------------------------------------------|
+| `--uboot-source <val>` | Override `UBOOT_SOURCE`                                  |
+|-----------------------------------------------------------------------------------|
+| `--uboot-script <val>` | Override `UBOOT_SCRIPT`                                  |
+|-----------------------------------------------------------------------------------|
+
+## Input and Precedence
+
+The ImageBuilder mode uses:
+
+1. the specified Xen domain under `/domains`
+2. optional CLI overrides
+3. built-in defaults when neither YAML nor CLI provides a value
+
+Precedence is:
+
+`CLI > specified Xen domain properties > child domain properties > defaults`
+
+## Tree Conventions
+
+The primary tree-based flow expects `/domains/<xen-domain>` to exist and
+the specified domain's `compatible` property to contain
+`xen,domain-v1`. The `compatible` property may contain multiple strings;
+one matching `xen,domain-v1` is sufficient.
+
+Dom0 is identified among the specified Xen domain's child domains by:
+
+- `--dom0 <name>` if passed
+- `imagebuilder,role = "dom0"`
+- `xen,dom0`
+- `os,type = "linux"`
+- fallback to a domain name containing `dom0` or `linux`
+
+ImageBuilder-specific per-domain overrides can be provided as device tree
+properties such as:
+
+- `imagebuilder,kernel`
+- `imagebuilder,ramdisk`
+- `imagebuilder,passthrough-dtb`
+- `imagebuilder,memory-mb`
+- `imagebuilder,vcpus`
+- `imagebuilder,cmdline`
+
+Global overrides can be provided under the specified Xen domain with
+properties such as:
+
+- `imagebuilder,xen-cmd`
+- `imagebuilder,device-tree`
+- `imagebuilder,dom0-kernel`
+- `imagebuilder,dom0-cmd`
+- `imagebuilder,dom0-ramdisk`
+- `imagebuilder,uboot-source`
+- `imagebuilder,uboot-script`
+
+## Defaults
+
+Current built-in defaults match the canonical ImageBuilder flow:
+
+- `MEMORY_START="0x0"`
+- `MEMORY_END="0x80000000"`
+- `DEVICE_TREE="mpsoc.dtb"`
+- `XEN="xen"`
+- `DOM0_KERNEL="Image-dom0"`
+- `DOM0_RAMDISK="dom0-ramdisk.cpio"`
+- `UBOOT_SOURCE="boot.source"`
+- `UBOOT_SCRIPT="boot.scr"`
+- DomU kernel default: `<domain-name>/Image-domU`
+- DomU ramdisk default: `<domain-name>/domU-ramdisk.cpio`
+- DomU memory default: `512`
+- DomU vcpus default: `1`
+
+When defaults are used, the assist emits warnings.
+
+## Current Limitations
+
+- The current flow is aimed at Xen Dom0 plus DomU ImageBuilder generation.
+- DomU ramdisk inputs are supported; rootfs-only DomU inputs are rejected.
+- Passthrough DTB is supported as a simple string path.
