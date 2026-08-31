@@ -127,6 +127,104 @@ def test_legacy_zephyr_memories_do_not_override_sram():
         "/reserved-memory/ddr@9800000"]
 
 
+@pytest.mark.parametrize("target_os", ["linux_dt", "zephyr_dt"])
+def test_openamp_does_not_modify_linux_or_zephyr_timers(monkeypatch,
+                                                        target_os):
+    """Linux YAML and Zephyr domain policy remain authoritative for timers."""
+    tree = LopperTree()
+    tree + LopperNode(-1, "/axi")
+    tree + LopperNode(-1, "/domains")
+
+    ttc0 = LopperNode(-1, "/axi/timer@ff110000")
+    ttc0["compatible"] = "cdns,ttc"
+    ttc0["status"] = "okay"
+    tree + ttc0
+    ttc0.phandle_or_create()
+
+    ttc2 = LopperNode(-1, "/axi/timer@ff130000")
+    ttc2["compatible"] = "uio"
+    ttc2["status"] = "disabled"
+    tree + ttc2
+    ttc2.phandle_or_create()
+
+    fan = LopperNode(-1, "/pwm-fan")
+    fan["compatible"] = "pwm-fan"
+    fan["pwms"] = [ttc0.phandle, 2, 40000, 1]
+    tree + fan
+
+    domain = LopperNode(-1, "/domains/APU_Linux")
+    domain["os,type"] = ["linux"]
+    tree + domain
+    d2d = LopperNode(-1, "/domains/APU_Linux/domain-to-domain")
+    tree + d2d
+    relation = LopperNode(
+        -1,
+        "/domains/APU_Linux/domain-to-domain/libmetal-relation",
+    )
+    tree + relation
+    relation["timer"] = [ttc2.phandle]
+    tree.sync()
+
+    monkeypatch.setattr(openamp_xlnx, "get_platform",
+                        lambda tree, verbose=0: openamp_xlnx.SOC_TYPE.ZYNQMP)
+
+    sdt = type("FakeSdt", (), {"tree": tree})()
+    assert not openamp_xlnx.xlnx_openamp_normalize_baremetal_timers(
+        sdt, target_os, "psu_cortexa53_0")
+
+    assert tree[ttc0.abs_path] is ttc0
+    assert fan.propval("pwms", list) == [ttc0.phandle, 2, 40000, 1]
+    assert ttc2.propval("compatible", list) == ["uio"]
+    assert ttc2.propval("status", list) == ["disabled"]
+
+
+def test_openamp_normalizes_only_selected_baremetal_timer(monkeypatch):
+    """Bare-metal undoing of a Linux UIO overlay is relation-scoped."""
+    tree = LopperTree()
+    tree + LopperNode(-1, "/axi")
+    tree + LopperNode(-1, "/domains")
+
+    selected = LopperNode(-1, "/axi/timer@ff130000")
+    selected["compatible"] = "uio"
+    tree + selected
+    selected.phandle_or_create()
+    unrelated = LopperNode(-1, "/axi/timer@ff140000")
+    unrelated["compatible"] = "uio"
+    tree + unrelated
+    unrelated.phandle_or_create()
+
+    domain = LopperNode(-1, "/domains/R5_1_BAREMETAL")
+    tree + domain
+    d2d = LopperNode(-1, "/domains/R5_1_BAREMETAL/domain-to-domain")
+    tree + d2d
+    relation = LopperNode(
+        -1,
+        "/domains/R5_1_BAREMETAL/domain-to-domain/libmetal-relation",
+    )
+    tree + relation
+    channel = LopperNode(
+        -1,
+        "/domains/R5_1_BAREMETAL/domain-to-domain/libmetal-relation/relation0",
+    )
+    tree + channel
+    channel["timer"] = [selected.phandle]
+    tree.sync()
+
+    monkeypatch.setattr(openamp_xlnx, "get_platform",
+                        lambda tree, verbose=0: openamp_xlnx.SOC_TYPE.ZYNQMP)
+    monkeypatch.setattr(openamp_xlnx, "get_cpu_node",
+                        lambda sdt, options: object())
+    monkeypatch.setattr(openamp_xlnx, "_openamp_domain_selects_cpu",
+                        lambda tree, domain, cpu: True)
+
+    sdt = type("FakeSdt", (), {"tree": tree})()
+    assert openamp_xlnx.xlnx_openamp_normalize_baremetal_timers(
+        sdt, "baremetal_dt", "psu_cortexr5_1")
+
+    assert selected.propval("compatible", list) == ["cdns,ttc"]
+    assert unrelated.propval("compatible", list) == ["uio"]
+
+
 def test_zephyr_ipc_shm_replaces_domain_carveout_references():
     """Consolidated IPC memory replaces deleted domain phandles."""
     tree = LopperTree()
